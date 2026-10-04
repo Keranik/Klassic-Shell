@@ -1249,7 +1249,8 @@ HRESULT STDMETHODCALLTYPE CExplorerBHO::SetSite( IUnknown *pUnkSite )
 					m_HookKbd=SetWindowsHookEx(WH_KEYBOARD,HookKeyboard,NULL,GetCurrentThreadId());
 				}
 
-				if ((bWin8 && GetSettingBool(L"ShowStatusBar")) || (!bWin8 && GetSettingBool(L"ShowFreeSpace")))
+				// Windows 11 already has its own status bar. The Win8 bar would stack under it.
+				if ((bWin8 && !IsWin11() && GetSettingBool(L"ShowStatusBar")) || (!bWin8 && GetSettingBool(L"ShowFreeSpace")))
 				{
 					DWORD flags=(GetSettingBool(L"ShowInfoTip")?SHOW_INFOTIP:0)|(GetSettingBool(L"ShowFreeSpace")?SHOW_FREE_SPACE:0);
 					if (bWin8)
