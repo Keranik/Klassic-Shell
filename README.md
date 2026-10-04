@@ -1,3 +1,22 @@
+# Klassic Shell
+
+Klassic Shell is a continuation of [Open-Shell-Menu](https://github.com/Open-Shell/Open-Shell-Menu), which continues [Classic Shell](http://www.classicshell.net) by [Ivo Beltchev](https://sourceforge.net/u/ibeltchev/profile/). It is maintained by [Keranik](https://github.com/Keranik).
+
+Open-Shell is not taking Windows 11 taskbar changes. This repository keeps that work on top of upstream Open-Shell.
+
+### What changed
+
+- The Windows 11 taskbar can be fully transparent again. The existing opaque and glass looks apply to the XAML taskbar.
+- A taskbar texture replaces the Windows background instead of being drawn on top of it.
+- A custom start-button image replaces the Windows logo, including on other monitors that show their own taskbar.
+- The custom image is centered in the Windows 11 start-button slot. The original Start button no longer stays clickable underneath it.
+
+The program name and installer are still Open-Shell. Build from this repository to get the taskbar fix.
+
+Later Open-Shell updates can be merged from `upstream` (`https://github.com/Open-Shell/Open-Shell-Menu.git`) into `main` with `git fetch upstream` and `git merge upstream/master`.
+
+----
+
 <a href="#"><img src=/Src/Setup/OpenShell.ico width="80" align="left"/></a>
 
 
