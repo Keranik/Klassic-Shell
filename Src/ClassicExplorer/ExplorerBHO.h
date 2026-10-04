@@ -42,8 +42,11 @@ public:
 		m_Progress=NULL;
 		m_Status=m_Status8=NULL;
 		m_DUIView=NULL;
-		m_Hook=m_HookKbd=NULL;
+		m_Hook=m_HookKbd=m_HookMenu=NULL;
 		m_Balloon=NULL;
+		m_NoGroupBurst=0;
+		m_GroupAttempts=0;
+		m_bClearingGroup=false;
 		m_UpButtonIndex=0;
 		m_UpHotkey=0;
 		m_IconNormal=m_IconHot=m_IconPressed=m_IconDisabled=NULL;
@@ -59,6 +62,7 @@ public:
 		SINK_ENTRY_EX(1, DIID_DWebBrowserEvents2, DISPID_DOCUMENTCOMPLETE, OnDocumentComplete)
 		SINK_ENTRY_EX(1, DIID_DWebBrowserEvents2, DISPID_ONQUIT, OnQuit)
 		SINK_ENTRY_EX(2, DIID_DShellFolderViewEvents, DISPID_SELECTIONCHANGED, OnSelChanged)
+		SINK_ENTRY_EX(2, DIID_DShellFolderViewEvents, DISPID_FILELISTENUMDONE, OnEnumDone)
 	END_SINK_MAP()
 
 	BEGIN_COM_MAP(CExplorerBHO)
@@ -111,6 +115,7 @@ public:
 
 	// DShellFolderViewEvents
 	STDMETHOD(OnSelChanged)( void );
+	STDMETHOD(OnEnumDone)( void );
 
 private:
 	// Super-class the toolbar, so it has a different class name. A program called Folder Menu 3 looks for specific controls in Explorer,
@@ -150,6 +155,14 @@ private:
 	UINT m_NavigateMsg; // private message that is posted to the progress bar to navigate to m_NavigatePidl
 	HHOOK m_Hook;
 	HHOOK m_HookKbd;
+	HHOOK m_HookMenu;
+	int m_NoGroupBurst;
+	int m_GroupAttempts;
+	bool m_bClearingGroup;
+	void ClearGrouping( void );
+	void ScheduleClearGrouping( void );
+	static void CALLBACK NoGroupingTimerProc( HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime );
+	static LRESULT CALLBACK HookMenu( int code, WPARAM wParam, LPARAM lParam );
 	HWND m_Breadcrumbs;
 	HWND m_Progress;
 	HWND m_Status, m_Status8;
