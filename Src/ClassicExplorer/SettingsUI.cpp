@@ -572,6 +572,7 @@ static CSetting g_Settings[]={
 	{L"ShareExplorer",CSetting::TYPE_BOOL,IDS_SHARE_EXPLORER,IDS_SHARE_EXPLORER_TIP,1,CSetting::FLAG_COLD,L"ShareOverlay",L"ShareOverlay"},
 	{L"ShowHeaders",CSetting::TYPE_BOOL,IDS_HEADERS,IDS_HEADERS_TIP,0,CSetting::FLAG_WARM},
 	{L"HideScrollTip",CSetting::TYPE_BOOL,IDS_SCROLLTIP,IDS_SCROLLTIP_TIP,0,CSetting::FLAG_WARM},
+	{L"DisableGrouping",CSetting::TYPE_BOOL,IDS_NO_GROUPING,IDS_NO_GROUPING_TIP,1,CSetting::FLAG_WARM|CSetting::FLAG_BASIC},
 
 {L"FileOperation",CSetting::TYPE_GROUP,IDS_FILE_SETTINGS},
 	{L"ReplaceFileUI",CSetting::TYPE_BOOL,IDS_FILE_UI,IDS_FILE_UI_TIP,1,CSetting::FLAG_WARM|CSetting::FLAG_BASIC},

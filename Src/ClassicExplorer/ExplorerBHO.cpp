@@ -18,6 +18,7 @@
 #include <uxtheme.h>
 #include <dwmapi.h>
 #include <Ntquery.h>
+#include <propkey.h>
 #include <algorithm>
 
 // CExplorerBHO - a browser helper object that implements Alt+Enter for the folder tree
@@ -1248,6 +1249,8 @@ HRESULT STDMETHODCALLTYPE CExplorerBHO::SetSite( IUnknown *pUnkSite )
 				{
 					m_HookKbd=SetWindowsHookEx(WH_KEYBOARD,HookKeyboard,NULL,GetCurrentThreadId());
 				}
+				if (!m_HookMenu)
+					m_HookMenu=SetWindowsHookEx(WH_CALLWNDPROC,HookMenu,NULL,GetCurrentThreadId());
 
 				// Windows 11 already has its own status bar. The Win8 bar would stack under it.
 				if ((bWin8 && !IsWin11() && GetSettingBool(L"ShowStatusBar")) || (!bWin8 && GetSettingBool(L"ShowFreeSpace")))
@@ -1328,6 +1331,11 @@ HRESULT STDMETHODCALLTYPE CExplorerBHO::SetSite( IUnknown *pUnkSite )
 		if (m_HookKbd)
 			UnhookWindowsHookEx(m_HookKbd);
 		m_HookKbd=NULL;
+		if (m_HookMenu)
+			UnhookWindowsHookEx(m_HookMenu);
+		m_HookMenu=NULL;
+		if (m_TopWindow)
+			KillTimer(m_TopWindow,(UINT_PTR)this);
 		if (m_Status)
 			RemoveWindowSubclass(m_Status,SubclassStatusProc,(UINT_PTR)this);
 		m_Status=NULL;
@@ -1482,6 +1490,9 @@ STDMETHODIMP CExplorerBHO::OnDocumentComplete( IDispatch *pDisp, VARIANT *URL )
 			if (pOptions)
 				pOptions->SetFolderViewOptions(FVO_NOSCROLLTIPS,FVO_NOSCROLLTIPS);
 		}
+		// Windows 11 puts the folder type's Group by back after the view is created.
+		m_GroupAttempts=0;
+		ScheduleClearGrouping();
 	}
 	if (m_Toolbar.m_hWnd)
 		m_Toolbar.SendMessage(TB_ENABLEBUTTON,1,bDesktop?0:1);
@@ -1544,6 +1555,8 @@ STDMETHODIMP CExplorerBHO::OnDocumentComplete( IDispatch *pDisp, VARIANT *URL )
 
 STDMETHODIMP CExplorerBHO::OnQuit( void )
 {
+	if (m_TopWindow)
+		KillTimer(m_TopWindow,(UINT_PTR)this);
 	if (m_pWebBrowser && DispEvent1::m_dwEventCookie!=0xFEFEFEFE) // ATL's event cookie is 0xFEFEFEFE, when the sink is not advised
 		DispEvent1::DispEventUnadvise(m_pWebBrowser,&DIID_DWebBrowserEvents2);
 	if (m_pWebDoc && DispEvent2::m_dwEventCookie!=0xFEFEFEFE)
@@ -1558,6 +1571,133 @@ STDMETHODIMP CExplorerBHO::OnSelChanged( void )
 	if (m_Status8)
 		SendMessage(m_Status8,WM_CLEAR,0,0);
 	return S_OK;
+}
+
+STDMETHODIMP CExplorerBHO::OnEnumDone( void )
+{
+	// Enumeration finishing is when Explorer applies a saved Group by.
+	ScheduleClearGrouping();
+	return S_OK;
+}
+
+static bool IsGroupByLabel( const wchar_t *text )
+{
+	wchar_t buf[128];
+	int n=0;
+	if (!text || !text[0])
+		return false;
+	for (const wchar_t *p=text;*p && n<_countof(buf)-1;p++)
+	{
+		if (*p=='&')
+			continue;
+		if (*p=='\t')
+			break;
+		buf[n++]=*p;
+	}
+	while (n>0 && buf[n-1]==' ')
+		n--;
+	buf[n]=0;
+	return _wcsicmp(buf,L"Group by")==0;
+}
+
+static void RemoveGroupByItems( HMENU menu )
+{
+	if (!menu)
+		return;
+	for (int i=GetMenuItemCount(menu)-1;i>=0;i--)
+	{
+		wchar_t text[256];
+		MENUITEMINFO info={sizeof(info)};
+		info.fMask=MIIM_FTYPE|MIIM_STRING|MIIM_SUBMENU;
+		info.dwTypeData=text;
+		info.cch=_countof(text);
+		if (!GetMenuItemInfo(menu,i,TRUE,&info))
+			continue;
+		if (!(info.fType&MFT_SEPARATOR) && IsGroupByLabel(text))
+			DeleteMenu(menu,i,MF_BYPOSITION);
+		else if (info.hSubMenu)
+			RemoveGroupByItems(info.hSubMenu);
+	}
+}
+
+LRESULT CALLBACK CExplorerBHO::HookMenu( int code, WPARAM wParam, LPARAM lParam )
+{
+	if (code==HC_ACTION)
+	{
+		const CWPSTRUCT *cw=(const CWPSTRUCT*)lParam;
+		if (cw->message==WM_INITMENUPOPUP && IsMenu((HMENU)cw->wParam) && GetSettingBool(L"DisableGrouping"))
+			RemoveGroupByItems((HMENU)cw->wParam);
+	}
+	return CallNextHookEx(NULL,code,wParam,lParam);
+}
+
+void CExplorerBHO::ClearGrouping( void )
+{
+	if (m_bClearingGroup || !GetSettingBool(L"DisableGrouping") || !m_pBrowser)
+		return;
+	// SetGroupBy can notify the view, which calls back in here.
+	m_bClearingGroup=true;
+	CComPtr<IShellView> pView;
+	if (SUCCEEDED(m_pBrowser->QueryActiveShellView(&pView)) && pView)
+	{
+		CComQIPtr<IFolderView2> pView2(pView);
+		if (pView2)
+		{
+			DWORD flags=0;
+			if (SUCCEEDED(pView2->GetCurrentFolderFlags(&flags)) && (flags&FWF_NOGROUPING)==0)
+				pView2->SetCurrentFolderFlags(FWF_NOGROUPING,FWF_NOGROUPING);
+
+			PROPERTYKEY key;
+			BOOL ascending=TRUE;
+			if (SUCCEEDED(pView2->GetGroupBy(&key,&ascending)))
+			{
+				if (key==PKEY_Null)
+					m_GroupAttempts=0;
+				else if (m_GroupAttempts<4)
+				{
+					m_GroupAttempts++;
+					pView2->SetGroupBy(PKEY_Null,TRUE);
+				}
+			}
+		}
+	}
+	m_bClearingGroup=false;
+}
+
+void CExplorerBHO::ScheduleClearGrouping( void )
+{
+	if (m_bClearingGroup)
+		return;
+	if (!GetSettingBool(L"DisableGrouping"))
+	{
+		if (m_TopWindow)
+			KillTimer(m_TopWindow,(UINT_PTR)this);
+		return;
+	}
+	ClearGrouping();
+	if (!m_TopWindow)
+		return;
+	// A few quick passes, then a slow check so a later Group by does not stick.
+	m_NoGroupBurst=3;
+	SetTimer(m_TopWindow,(UINT_PTR)this,100,NoGroupingTimerProc);
+}
+
+void CALLBACK CExplorerBHO::NoGroupingTimerProc( HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime )
+{
+	CExplorerBHO *pThis=(CExplorerBHO*)idEvent;
+	pThis->ClearGrouping();
+	if (pThis->m_GroupAttempts>=4)
+	{
+		KillTimer(hwnd,idEvent);
+		return;
+	}
+	UINT delay=2000;
+	if (pThis->m_NoGroupBurst>0)
+	{
+		pThis->m_NoGroupBurst--;
+		delay=400;
+	}
+	SetTimer(hwnd,idEvent,delay,NoGroupingTimerProc);
 }
 
 bool ShowTreeProperties( HWND hwndTree )

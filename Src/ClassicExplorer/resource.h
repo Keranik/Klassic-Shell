@@ -323,6 +323,8 @@
 #define IDS_STATUS_FONT_TIP             2245
 #define IDS_FOLDEROPTIONS               2246
 #define IDS_FOLDEROPTIONS_TIP           2247
+#define IDS_NO_GROUPING                 2248
+#define IDS_NO_GROUPING_TIP             2249
 
 // Next default values for new objects
 // 

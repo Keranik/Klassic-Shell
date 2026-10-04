@@ -906,9 +906,13 @@ void CBandWindow::ExecuteCustomCommand( const wchar_t *pCommand )
 		}
 		else if (_wcsicmp(exe,L"groupby")==0)
 		{
-			CComQIPtr<IFolderView2> pView2(pView);
-			if (pView2)
-				ViewByProperty(pView2,params,true);
+			// The File Pane setting owns grouping. A toolbar button must not turn it back on.
+			if (!GetSettingBool(L"DisableGrouping"))
+			{
+				CComQIPtr<IFolderView2> pView2(pView);
+				if (pView2)
+					ViewByProperty(pView2,params,true);
+			}
 		}
 		else if (bArg3 || bArg4 || bArg5)
 		{

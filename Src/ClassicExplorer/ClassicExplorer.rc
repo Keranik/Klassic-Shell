@@ -515,6 +515,8 @@ BEGIN
     IDS_SHARE_EXPLORER_TIP  "When this is checked, the overlay icon will be shown only in Explorer. Otherwise they will be shown in all processes"
     IDS_HEADERS             "Show sort headers in all views"
     IDS_HEADERS_TIP         "When this is checked, the sort headers will show in all views, not just Details"
+    IDS_NO_GROUPING         "Disable Group by"
+    IDS_NO_GROUPING_TIP     "When this is checked, folders are not grouped and the Group by command is removed. Open a new Explorer window after changing this."
     IDS_SCROLLBAR           "Show horizontal scrollbar"
     IDS_SCROLLBAR_TIP       "Select if the horizontal scrollbar will be enabled"
     IDS_SCROLLBAR_DEFAULT   "Default"
