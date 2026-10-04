@@ -628,6 +628,8 @@ void UpdateSettings( void )
 		{
 			FindSetting(L"TreeStyle")[1].flags|=CSetting::FLAG_HIDDEN;
 		}
+		if (IsWin11())
+			HideSettingGroup(L"StatusBar8",true);
 	}
 	else
 	{
