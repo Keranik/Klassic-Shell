@@ -24,6 +24,7 @@
 #include <set>
 #include <Thumbcache.h>
 #include <tlhelp32.h>
+#include <wtsapi32.h>
 
 #define HOOK_DROPTARGET // define this to replace the IDropTarget of the start button
 #define START_TOUCH // touch support for the start button
@@ -300,6 +301,9 @@ public:
 		MESSAGE_HANDLER( WM_SYSCOLORCHANGE, OnColorChange )
 		MESSAGE_HANDLER( WM_SETTINGCHANGE, OnSettingChange )
 		MESSAGE_HANDLER( WM_DISPLAYCHANGE, OnDisplayChange )
+		MESSAGE_HANDLER( WM_POWERBROADCAST, OnPowerBroadcast )
+		MESSAGE_HANDLER( WM_WTSSESSION_CHANGE, OnSessionChange )
+		MESSAGE_HANDLER( WM_TIMER, OnTimer )
 	END_MSG_MAP()
 
 protected:
@@ -347,6 +351,35 @@ protected:
 	{
 		if (!CMenuContainer::s_Menus.empty())
 			CMenuContainer::s_Menus[0]->NotifyDisplayChange();
+		ScheduleWin11TaskbarRepair();
+		return 0;
+	}
+
+	LRESULT OnPowerBroadcast( UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled )
+	{
+		if (wParam==PBT_APMRESUMEAUTOMATIC || wParam==PBT_APMRESUMESUSPEND || wParam==PBT_APMRESUMECRITICAL)
+			ScheduleWin11TaskbarRepair();
+		return 0;
+	}
+
+	LRESULT OnSessionChange( UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled )
+	{
+		if (wParam==WTS_SESSION_UNLOCK || wParam==WTS_CONSOLE_CONNECT)
+			ScheduleWin11TaskbarRepair();
+		return 0;
+	}
+
+	LRESULT OnTimer( UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled )
+	{
+		if (wParam==WIN11_TASKBAR_WATCH_TIMER)
+			OnWin11TaskbarWatchTimer();
+		else if (wParam==WIN11_TASKBAR_WAKE_TIMER)
+			OnWin11TaskbarWakeTimer();
+		else if (wParam==WIN11_TASKBAR_STATE_TIMER)
+		{
+			KillTimer(WIN11_TASKBAR_STATE_TIMER);
+			ApplyWin11Taskbar();
+		}
 		return 0;
 	}
 };
@@ -476,6 +509,18 @@ STARTMENUAPI HWND FindTaskBar( DWORD process )
 				}
 			}
 			g_OwnerWindow=g_Owner.Create(NULL,0,0,WS_POPUP,WS_EX_TOOLWINDOW|WS_EX_TOPMOST);
+			if (IsWin11() && g_OwnerWindow)
+			{
+				SetTimer(g_OwnerWindow,WIN11_TASKBAR_WATCH_TIMER,3000,NULL);
+				HMODULE wts=LoadLibrary(L"wtsapi32.dll");
+				if (wts)
+				{
+					typedef BOOL (WINAPI *tRegister)( HWND, DWORD );
+					tRegister reg=(tRegister)GetProcAddress(wts,"WTSRegisterSessionNotification");
+					if (reg)
+						reg(g_OwnerWindow,NOTIFY_FOR_THIS_SESSION);
+				}
+			}
 		}
 	}
 	return g_TaskBar;

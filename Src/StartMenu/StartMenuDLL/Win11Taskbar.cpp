@@ -215,6 +215,8 @@ static bool IsStartGlyph( const CString &type, const CString &name )
 	return false;
 }
 
+static void ApplyBridgeAccent( void );
+
 class CTaskbarTap;
 
 static CTaskbarTap *g_Tap=NULL;
@@ -259,6 +261,7 @@ public:
 		m_Pending=false;
 		m_Framework=0;
 		m_PrimaryStart=0;
+		m_LastStateApply=0;
 		m_Handler=new CApplyHandler(this);
 	}
 
@@ -285,6 +288,7 @@ public:
 	}
 
 	static CTaskbarTap *Existing( void ) { return g_Tap; }
+	static bool AnyConnected( void ) { return g_Tap && g_Tap->m_Visual; }
 
 	STDMETHODIMP QueryInterface( REFIID riid, void **ppv )
 	{
@@ -420,7 +424,35 @@ public:
 		return S_OK;
 	}
 
-	STDMETHODIMP OnElementStateChanged( OsHandle, int, LPCWSTR ) { return S_OK; }
+	STDMETHODIMP OnElementStateChanged( OsHandle element, int, LPCWSTR )
+	{
+		bool care=false;
+		LockElements();
+		std::unordered_map<OsHandle,OsElement>::iterator it=m_Elements.find(element);
+		if (it!=m_Elements.end())
+		{
+			care=(it->second.name==L"BackgroundFill" || it->second.name==L"BackgroundStroke" || ContainsText(it->second.type,L"TaskbarFrame") || ContainsText(it->second.type,L"TaskbarBackground"));
+		}
+		UnlockElements();
+		if (!care)
+			return S_OK;
+		// Hover and animation change this state often. One repaint per quiet spell is enough.
+		DWORD now=GetTickCount();
+		if (now-m_LastStateApply<500)
+		{
+			if (g_OwnerWindow)
+				SetTimer(g_OwnerWindow,WIN11_TASKBAR_STATE_TIMER,500,NULL);
+			return S_OK;
+		}
+		m_LastStateApply=now;
+		if (t_ApplyDepth)
+		{
+			m_Pending=true;
+			return S_OK;
+		}
+		ApplyStyles();
+		return S_OK;
+	}
 
 	void RequestApply( void )
 	{
@@ -446,6 +478,9 @@ public:
 	{
 		if (!m_Visual)
 			return E_FAIL;
+		// The composition window behind the XAML bar is a different object. A wake
+		// can replace it without replacing the rectangles we already painted.
+		ApplyBridgeAccent();
 		t_ApplyDepth++;
 		m_Pending=false;
 
@@ -894,8 +929,9 @@ private:
 		if (!Describe(handle,&element,&ancestor))
 			return S_FALSE;
 
-		bool fill=element.name==L"BackgroundFill" && ContainsText(element.type,L"Rectangle") && ancestor.taskbar;
-		bool stroke=element.name==L"BackgroundStroke" && ContainsText(element.type,L"Rectangle") && ancestor.taskbar;
+		// The rectangle can be reported before its taskbar parent is recorded.
+		bool fill=element.name==L"BackgroundFill" && ContainsText(element.type,L"Rectangle");
+		bool stroke=element.name==L"BackgroundStroke" && ContainsText(element.type,L"Rectangle");
 		bool startControl=ContainsText(element.type,L"ExperienceToggleButton");
 		bool icon=ancestor.startButton && IsStartGlyph(element.type,element.name);
 		bool silence=startControl && style->replaceButton && (style->allTaskbars || !m_PrimaryStart || handle==m_PrimaryStart);
@@ -1030,6 +1066,7 @@ private:
 
 	LONG m_Refs;
 	DWORD m_XamlThread;
+	DWORD m_LastStateApply;
 	bool m_Pending;
 	int m_Framework;
 	OsHandle m_PrimaryStart;
@@ -1126,6 +1163,71 @@ static void ReadAccentSettings( bool *custom, int *look, int *opacity, COLORREF 
 
 static OsSetWindowComposition g_SetWindowComposition=NULL;
 static bool g_BridgeAccented=false;
+static LONG g_ConnectStarted=0;
+
+struct OsBridgeList
+{
+	HWND hwnds[8];
+	int count;
+};
+
+static OsBridgeList g_AppliedBridges;
+
+static BOOL CALLBACK CollectBridgeChild( HWND hwnd, LPARAM param )
+{
+	wchar_t name[128];
+	if (!GetClassName(hwnd,name,_countof(name)))
+		return TRUE;
+	if (wcscmp(name,L"Windows.UI.Composition.DesktopWindowContentBridge")!=0)
+		return TRUE;
+	OsBridgeList *list=(OsBridgeList*)param;
+	if (list->count<(int)_countof(list->hwnds))
+		list->hwnds[list->count++]=hwnd;
+	return TRUE;
+}
+
+static BOOL CALLBACK CollectBridgeTray( HWND hwnd, LPARAM param )
+{
+	wchar_t name[64];
+	if (!GetClassName(hwnd,name,_countof(name)))
+		return TRUE;
+	if (wcscmp(name,L"Shell_TrayWnd")!=0 && wcscmp(name,L"Shell_SecondaryTrayWnd")!=0)
+		return TRUE;
+	EnumChildWindows(hwnd,CollectBridgeChild,param);
+	return TRUE;
+}
+
+static void CollectBridges( OsBridgeList *list )
+{
+	list->count=0;
+	EnumWindows(CollectBridgeTray,(LPARAM)list);
+}
+
+static int BridgeCount( int count )
+{
+	// The list is written on the XAML thread and read on the UI thread.
+	if (count<0 || count>8)
+		return 0;
+	return count;
+}
+
+static bool SameBridges( const OsBridgeList &a, const OsBridgeList &b )
+{
+	int countA=BridgeCount(a.count);
+	int countB=BridgeCount(b.count);
+	if (countA!=countB)
+		return false;
+	for (int i=0;i<countA;i++)
+	{
+		bool found=false;
+		for (int j=0;j<countB;j++)
+			if (a.hwnds[i]==b.hwnds[j])
+				found=true;
+		if (!found)
+			return false;
+	}
+	return true;
+}
 
 static BOOL CALLBACK AccentChild( HWND hwnd, LPARAM param )
 {
@@ -1163,12 +1265,14 @@ static void ApplyBridgeAccent( void )
 	ReadAccentSettings(&custom,&look,&opacity,&color);
 	if (!custom)
 	{
-		if (!g_BridgeAccented)
-			return;
-		int clear[4]={ 0, 0, 0, 0 };
-		OsCompAttrData attr={ 0x13, clear, sizeof(clear) };
-		EnumWindows(AccentTray,(LPARAM)&attr);
-		g_BridgeAccented=false;
+		if (g_BridgeAccented)
+		{
+			int clear[4]={ 0, 0, 0, 0 };
+			OsCompAttrData attr={ 0x13, clear, sizeof(clear) };
+			EnumWindows(AccentTray,(LPARAM)&attr);
+			g_BridgeAccented=false;
+		}
+		CollectBridges(&g_AppliedBridges);
 		return;
 	}
 
@@ -1183,6 +1287,7 @@ static void ApplyBridgeAccent( void )
 	OsCompAttrData attr={ 0x13, data, sizeof(data) };
 	EnumWindows(AccentTray,(LPARAM)&attr);
 	g_BridgeAccented=true;
+	CollectBridges(&g_AppliedBridges);
 }
 
 struct OsConnectAttempt
@@ -1269,14 +1374,68 @@ void StartWin11TaskbarConnect( void )
 		return;
 	if (!SameText(PathFindFileName(exe),L"explorer.exe"))
 		return;
-	static LONG started=0;
-	if (InterlockedCompareExchange(&started,1,0)!=0)
+	if (InterlockedCompareExchange(&g_ConnectStarted,1,0)!=0)
 		return;
 	HANDLE thread=CreateThread(NULL,0,ConnectLoopThread,NULL,0,NULL);
 	if (thread)
 		CloseHandle(thread);
 	else
-		InterlockedExchange(&started,0);
+		InterlockedExchange(&g_ConnectStarted,0);
+}
+
+static DWORD g_WakeScheduled=0;
+static int g_WakeStep=0;
+static const UINT g_WakeDelays[]={ 500, 2000, 8000, 20000 };
+
+static void ReconnectWin11Taskbar( void )
+{
+	if (CTaskbarTap::AnyConnected())
+		return;
+	InterlockedExchange(&g_ConnectStarted,0);
+	StartWin11TaskbarConnect();
+}
+
+void ScheduleWin11TaskbarRepair( void )
+{
+	if (!IsWin11())
+		return;
+	DWORD now=GetTickCount();
+	if (g_WakeStep>0 && now-g_WakeScheduled<3000)
+		return;
+	g_WakeScheduled=now;
+	g_WakeStep=0;
+	LogToFile(STARTUP_LOG,L"Win11Taskbar: repairing taskbar after a display change");
+	ReconnectWin11Taskbar();
+	ApplyWin11Taskbar();
+	if (g_OwnerWindow)
+		SetTimer(g_OwnerWindow,WIN11_TASKBAR_WAKE_TIMER,g_WakeDelays[0],NULL);
+}
+
+void OnWin11TaskbarWakeTimer( void )
+{
+	ApplyWin11Taskbar();
+	g_WakeStep++;
+	if (!g_OwnerWindow || g_WakeStep>=(int)_countof(g_WakeDelays))
+	{
+		if (g_OwnerWindow)
+			KillTimer(g_OwnerWindow,WIN11_TASKBAR_WAKE_TIMER);
+		g_WakeStep=0;
+		return;
+	}
+	SetTimer(g_OwnerWindow,WIN11_TASKBAR_WAKE_TIMER,g_WakeDelays[g_WakeStep],NULL);
+}
+
+void OnWin11TaskbarWatchTimer( void )
+{
+	if (!IsWin11())
+		return;
+	OsBridgeList now;
+	CollectBridges(&now);
+	if (SameBridges(now,g_AppliedBridges))
+		return;
+	LogToFile(STARTUP_LOG,L"Win11Taskbar: taskbar surface was recreated");
+	ReconnectWin11Taskbar();
+	ApplyWin11Taskbar();
 }
 
 STARTMENUAPI void ConnectWin11Taskbar( DWORD explorerPid )
